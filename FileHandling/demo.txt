@@ -1,0 +1,309 @@
+package com.callhealth.restful;
+
+import java.util.Calendar;
+import java.util.HashMap;
+import java.util.List;
+
+import javax.ws.rs.Consumes;
+import javax.ws.rs.GET;
+import javax.ws.rs.POST;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
+
+import org.apache.log4j.Logger;
+
+import com.callhealth.entities.ChMessage;
+import com.callhealth.entities.EventID;
+import com.callhealth.persistence.DaoLibrary;
+import com.callhealth.utilities.CommonUtilities;
+import com.callhealth.utilities.EncryptUtils;
+import com.callhealth.utilities.ProjectProperties;
+import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
+
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
+
+@Path("/domain")
+@Produces("application/json")
+public class DomainService {
+
+	final Logger logger = Logger.getLogger(DomainService.class);
+
+	/**
+	 * Hear beat function to check if this service is working
+	 */
+	@GET
+	@Path("/ping")
+	public Response ping() {
+
+		try {
+			return Response.status(200).entity(new Gson().toJson("pong")).build();
+		} catch (JsonSyntaxException e) {
+			e.printStackTrace();
+		}
+		
+		return Response.status(400).entity("").build();
+	}
+	
+	@GET
+	@Path("/CheckPassword/{passwordStr}")
+	public Response CheckPassword(@PathParam("passwordStr") String passwordStr) {
+
+		logger.debug("CheckPassword- +passwordStr:" + passwordStr);
+		try {
+			String passwordInPropertiesFile = ProjectProperties.getProperty("AdminPassword");
+			if (passwordInPropertiesFile == null || passwordInPropertiesFile.isEmpty()) {
+				logger.error("No password file or password file is empty");
+				return Response.status(200).entity("0").build();
+			}
+			String decodedStr = EncryptUtils.base64decode(passwordInPropertiesFile);
+			if (passwordStr.compareTo(decodedStr) == 0) {
+				logger.debug("Password matched");
+				return Response.status(200).entity("1").build();
+			}
+		} catch (Exception e) {
+			logger.error("CheckPassword- exception:"+e.getMessage());
+		}
+
+		logger.error("Password did not match");
+		return Response.status(200).entity("0").build();
+	}
+	
+	@POST
+	@Path("/Publish")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Consumes(MediaType.APPLICATION_JSON)
+	public Response Publish(String paramsJson) {
+		logger.debug("SendSms: paramsJson" + paramsJson);
+
+		try {
+			HashMap<String, Object> params = (HashMap<String, Object>) new Gson().fromJson(paramsJson, HashMap.class);
+
+			String retVal = PublishMessage(params);
+			return Response.status(200).entity(new Gson().toJson(retVal)).build();
+		} catch (JsonSyntaxException e) {
+			e.printStackTrace();
+		}
+		return Response.status(400).entity(new Gson().toJson("Fail")).build();
+	}
+	
+	/**
+	 * 
+	 * @param paramsJson
+	 * @return
+	 */
+	public static String PublishMessage(HashMap params) {
+		Logger logger = Logger.getLogger(DomainService.class);
+		logger.debug("SendSms: paramsJson" + params);
+		try {
+
+
+			// Check if event id is specified
+			Object eventIDObj = params.get("eventID");
+			if (eventIDObj == null || eventIDObj.toString().isEmpty()) {
+				return "Invalid event ID";
+			}
+			
+			// Given event ID should be registered with us
+			DaoLibrary daoLibrary = new DaoLibrary();
+			EventID eventID = (EventID) daoLibrary.findByID(EventID.class, "I", eventIDObj.toString()+"");
+			if (eventID == null) {
+				return "Invalid event ID";
+			}
+			
+			// Construct ChMessage object
+			ChMessage chMessage = new ChMessage();
+			chMessage.setEventID(eventID.getID());
+			
+			// Get the parameters
+			Object applicationObj = params.get("application");
+			if (applicationObj != null && !applicationObj.toString().isEmpty()) {
+				chMessage.setApplication(applicationObj.toString());
+			}
+
+			Object businessObj = params.get("business");
+			if (businessObj != null && !businessObj.toString().isEmpty()) {
+				chMessage.setBusiness(businessObj.toString());
+			}			
+
+			Object eventTypeObj = params.get("eventType");
+			if (eventTypeObj != null && !eventTypeObj.toString().isEmpty()) {
+				chMessage.setEventType(eventTypeObj.toString());
+			}		
+
+			Object customerIDObj = params.get("customerID");
+			if (customerIDObj != null && !customerIDObj.toString().isEmpty()) {
+				chMessage.setCustomerID(customerIDObj.toString());
+			}		
+
+			Object mrnObj = params.get("mrn");
+			if (mrnObj != null && !mrnObj.toString().isEmpty()) {
+				chMessage.setMrn(mrnObj.toString());
+			}		
+
+			Object orderNumberObj = params.get("orderNumber");
+			if (orderNumberObj != null && !orderNumberObj.toString().isEmpty()) {
+				chMessage.setOrderNumber(orderNumberObj.toString());
+			}		
+
+			Object orderDateTimeObj = params.get("orderDateTime");
+			if (orderDateTimeObj != null && !orderDateTimeObj.toString().isEmpty()) {
+				Calendar cal = CommonUtilities.ParseDate("dd-MM-yyyy HH:mm", orderDateTimeObj.toString());
+				if (cal == null) {
+					return "Invalid order date, expected format is dd-MM-yyyy HH:mm";
+				}
+				chMessage.setOrderDateTime(cal);
+			}			
+
+			Object subjectObj = params.get("subject");
+			if (subjectObj != null && !subjectObj.toString().isEmpty()) {
+				chMessage.setSubject(subjectObj.toString());
+			}		
+
+			Object messageObj = params.get("message");
+			if (messageObj != null && !messageObj.toString().isEmpty()) {
+				chMessage.setMessage(messageObj.toString());
+			}		
+			
+			// Persist to database
+			daoLibrary.createEntity(chMessage);
+			
+			// Publish to ChMessage redis queue
+			String server = ProjectProperties.getProperty("ChMessage.server");
+			String portStr = ProjectProperties.getProperty("ChMessage.port");
+			int port = 0;
+			try {
+				port = Integer.parseInt(portStr);
+			} catch (NumberFormatException e) {
+				return "Invalid port number in configuration";
+			}
+			String channel = ProjectProperties.getProperty("ChMessage.channel");
+			final JedisPoolConfig poolConfig = new JedisPoolConfig();
+			JedisPool jedisPool = new JedisPool(poolConfig, server, port, 0);
+			Jedis jedis = jedisPool.getResource();
+			jedis.publish(channel, new Gson().toJson(chMessage));
+			jedisPool.close();
+			jedis.close();
+		}
+		catch (Exception e) {
+			return "Fail";
+		}
+		
+		return "Success";
+	}
+	
+	@POST
+	@Path("/GetMessages")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Consumes(MediaType.APPLICATION_JSON)
+	public Response GetMessages(String paramsJson) {
+		logger.debug("GetMessages: paramsJson" + paramsJson);
+		try {
+			HashMap<String, Object> params = (HashMap<String, Object>) new Gson().fromJson(paramsJson, HashMap.class);
+
+			//StringBuffer sb = new StringBuffer("select chm.eventID, chm.application, chm.business, chm.eventType, chm.customerID, chm.mrn, chm.orderNumber, chm.orderDateTime, chm.subject, chm.message, chm.dateCreated from ChMessage chm where ");
+			StringBuffer sb = new StringBuffer("select chm from ChMessage chm where ");
+			
+			String orderClause = " order by chm.dateCreated asc";
+
+			if (params != null) {
+				// Check if event id is specified
+				Object eventIDObj = params.get("eventID");
+				if (eventIDObj != null && !eventIDObj.toString().isEmpty()) {
+					int eventID = 0;
+					try {
+						eventID = Integer.parseInt(eventIDObj.toString());
+					} catch (NumberFormatException e) {
+						return Response.status(400).entity(new Gson().toJson("Invalid event ID")).build();
+					}
+					sb.append(" chm.eventID = "+eventID+" and ");
+				}
+				
+				// Check if application is specified
+				Object applicationObj = params.get("application");
+				if (applicationObj != null && !applicationObj.toString().isEmpty()) {
+					sb.append(" chm.application = "+"\""+applicationObj.toString()+"\""+" and ");
+				}
+				
+				Object businessObj = params.get("business");
+				if (businessObj != null && !businessObj.toString().isEmpty()) {
+					sb.append(" chm.business = "+"\""+businessObj.toString()+"\""+" and ");
+				}
+				
+				Object eventTypeObj = params.get("eventType");
+				if (eventTypeObj != null && !eventTypeObj.toString().isEmpty()) {
+					sb.append(" chm.eventType = "+"\""+eventTypeObj.toString()+"\""+" and ");
+				}
+				
+				Object customerIDObj = params.get("customerID");
+				if (customerIDObj != null && !customerIDObj.toString().isEmpty()) {
+					sb.append(" chm.customerID = "+"\""+customerIDObj.toString()+"\""+" and ");
+				}
+				
+				Object mrnObj = params.get("mrn");
+				if (mrnObj != null && !mrnObj.toString().isEmpty()) {
+					sb.append(" chm.mrn = "+"\""+mrnObj.toString()+"\""+" and ");
+				}
+				
+				Object orderNumberObj = params.get("orderNumber");
+				if (orderNumberObj != null && !orderNumberObj.toString().isEmpty()) {
+					sb.append(" chm.orderNumber = "+"\""+mrnObj.toString()+"\""+" and ");
+				}
+				
+				Object fromDateTimeObj = params.get("fromDateTime");
+				if (fromDateTimeObj != null && !fromDateTimeObj.toString().isEmpty()) {
+					Calendar cal = CommonUtilities.ParseDate("dd-MM-yyyy HH:mm:ss", fromDateTimeObj.toString());
+					if (cal == null) {
+						return Response.status(400).entity("Invalid from date").build();
+					}
+					String startDate = cal.get(Calendar.YEAR)+"-"+(cal.get(Calendar.MONTH)+1)+"-"+cal.get(Calendar.DATE)+" "+cal.get(Calendar.HOUR_OF_DAY)+":"+cal.get(Calendar.MINUTE)+":"+cal.get(Calendar.SECOND);
+					sb.append(" chm.orderDateTime >= "+"\""+startDate+"\""+" and ");
+				}
+				
+				Object toDateTimeObj = params.get("toDateTime");
+				if (toDateTimeObj != null && !toDateTimeObj.toString().isEmpty()) {
+					Calendar cal = CommonUtilities.ParseDate("dd-MM-yyyy HH:mm:ss", toDateTimeObj.toString());
+					if (cal == null) {
+						return Response.status(400).entity("Invalid to date").build();
+					}
+					String endDate = cal.get(Calendar.YEAR)+"-"+(cal.get(Calendar.MONTH)+1)+"-"+cal.get(Calendar.DATE)+" "+cal.get(Calendar.HOUR_OF_DAY)+":"+cal.get(Calendar.MINUTE)+":"+cal.get(Calendar.SECOND);
+					sb.append(" chm.orderDateTime <= "+"\""+endDate+"\""+" and ");
+				}
+				
+				Object orderObj = params.get("order");
+				if (orderObj != null) {
+					if (orderObj.toString().equalsIgnoreCase("desc")) {
+						orderClause = " order by chm.dateCreated desc";
+					}
+				}
+			}
+			
+			String queryString = sb.toString();
+			if (queryString.endsWith(" where ")) {
+				queryString = queryString.substring(0, queryString.length()-7);
+			} else if (queryString.endsWith(" and ")) {
+				queryString = queryString.substring(0, queryString.length()-5);
+			}
+			
+			queryString = queryString.concat(orderClause);
+
+			DaoLibrary daoLibrary = new DaoLibrary();
+			List resultList = daoLibrary.executeJPAQuery(queryString);
+
+			if (resultList == null || resultList.isEmpty()) {
+				return Response.status(200).entity("").build();
+			} else {
+				return Response.status(200).entity(new Gson().toJson(resultList)).build();
+			}
+			
+		} catch (Exception e) {
+			return Response.status(400).entity("").build();
+		}
+		
+	}
+}

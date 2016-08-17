@@ -15,10 +15,7 @@ public class ReadFileAndWriteToAnotherFile {
 			fin.close();fout.close();
 		}catch(Exception e){
 			e.printStackTrace();
-		}
-		
-		
-		
+		}		
 	}
 
 }
