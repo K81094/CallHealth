@@ -5,34 +5,16 @@ import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
 @Path("/calc")
+@Produces("application/json")
 public class CalcREST {
  
     @GET
     @Path("/add/{a}/{b}")
-    @Produces(MediaType.TEXT_PLAIN)
-    public String addPlainText(@PathParam("a") double a, @PathParam("b") double b) {
-        return (a + b) + "";
-    }
-     
-@GET
-    @Path("/sub/{a}/{b}")
-    @Produces(MediaType.TEXT_PLAIN)
-    public String subPlainText(@PathParam("a") double a, @PathParam("b") double b) {
-        return (a - b) + "";
-    }
- 
-    @GET
-    @Path("/add/{a}/{b}")
-    @Produces(MediaType.TEXT_XML)
-    public String add(@PathParam("a") double a, @PathParam("b") double b) {
-        return "<?xml version=\"1.0\"?>" + "<result>" +  (a + b) + "</result>";
-    }
-     
-    @GET
-    @Path("/sub/{a}/{b}")
-    @Produces(MediaType.TEXT_XML)
-    public String sub(@PathParam("a") double a, @PathParam("b") double b) {
-        return "<?xml version=\"1.0\"?>" + "<result>" +  (a - b) + "</result>";
+    @Produces("application/json")
+    public Response addPlainText(@PathParam("a") double a, @PathParam("b") double b) {
+    	
+        return Response.status(200).entity((a + b)).build();
     }
 }
