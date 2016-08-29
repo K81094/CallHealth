@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="ISO-8859-1">
+<title>Insert title here</title>
+</head>
+<body bgcolor="yellow">
+<H1>REST Service Working fine</H1>
+<br>
+<h2>This is a REST webservice made of Apache CXF and Spring Framework</h2><br>
+<hr>
+<h2>How to test the service</h2><hr>
+0. You can request User details without inserting anything but you will get response as following
+<br><br>
+URL: POST : http://localhost:8080/RestDemoCxf/services/rest/UserManager/fetchAllUsers/
+<br><br>
+JSON Req : body : {}
+<br><br>
+Response : {
+users: null
+errorMessage: null
+success: true
+}
+
+
+
+
+<hr>
+1.   First you need to insert a user value into the databse<br>
+You can do that by following ways: Open POSTMan and pass this query with JSON POST request 
+<br><br>
+URL : POST: http://localhost:8080/RestDemoCxf/services/rest/UserManager/insertUser 
+<br><br>
+Json POST :body: {"user":{"name":"Rocky","email":"someting@nospam.org","birthDate":"1975-01-01","city":"Omaha","state":"NE"}}
+<br><br>
+Response : {
+  "users": null,
+  "errorMessage": null,
+  "success": true
+}
+<hr>
+2. You can test the service by fetching user from the service
+<br><br>
+URL : POST: http://localhost:8080/RestDemoCxf/services/rest/UserManager/fetchAllUsers/  
+<br><br>
+Json Post : body : {}
+<br><br>
+Response : {
+  "users": [
+    {
+      "id": 0,
+      "name": "Rocky",
+      "email": "someting@nospam.org",
+      "birthDate": 157766400000,
+      "city": "Omaha",
+      "state": "NE"
+    },
+    {
+      "id": 1,
+      "name": "Rocky",
+      "email": "someting@nospam.org",
+      "birthDate": 157766400000,
+      "city": "Omaha",
+      "state": "NE"
+    }
+  ],
+  "errorMessage": null,
+  "success": true
+}
+</body>
+</html>
